@@ -1,7 +1,10 @@
-const express = require('express');
-const { createServer } = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
+import express from 'express';
+import { createServer } from 'http';
+import { Server, type Socket } from 'socket.io';
+import cors from 'cors';
+
+const PORT = process.env.PORT || 3001;
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 
 const app = express();
 app.use(cors());
@@ -9,20 +12,24 @@ app.use(cors());
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: "http://localhost:5173",
+    origin: CLIENT_URL,
     methods: ["GET", "POST"]
   }
 });
 
-io.on('connection', (socket: { id: any; on: (arg0: string, arg1: () => void) => void; }) => {
+io.on('connection', (socket: Socket) => {
   console.log('User connected:', socket.id);
 
+  socket.on('ping', () => {
+    socket.emit('pong', { timestamp: Date.now() });
+  });
   
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
   });
 });
 
-httpServer.listen(3001, () => {
-  console.log('Server running on port 3001');
+httpServer.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Accepting connections from ${CLIENT_URL}`);
 });
