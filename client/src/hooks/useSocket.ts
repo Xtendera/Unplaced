@@ -17,12 +17,11 @@ export const useSocket = () => {
     }
 
     const onConnect = () => {
-      console.log('Connected to server');
       setIsConnected(true);
+      socket?.emit('requestCanvas');
     };
 
     const onDisconnect = () => {
-      console.log('Disconnected from server');
       setIsConnected(false);
     };
 
@@ -51,10 +50,17 @@ export const useSocket = () => {
     }
   };
 
+  const setPixel = (x: number, y: number, color: string) => {
+    if (socket && isConnected) {
+      socket.emit('setPixel', { x, y, color });
+    }
+  };
+
   return {
     socket,
     isConnected,
     lastPong,
     sendPing,
+    setPixel,
   };
 };
