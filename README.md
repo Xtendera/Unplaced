@@ -1,15 +1,31 @@
-# unplaced
+# Unplaced
 
-To install dependencies:
+A website clone of r/place on Reddit! Complete one action every minute on a shared pixel art board that resets every day! See other user's cursors, and draw with different colors and brush sizes!
 
+## Run
+
+This project contains two submodules: The vite client and the express/SocketIO server. To install:
 ```bash
-bun install
+cd client && bun install
+cd ../server && bun install
 ```
 
-To run:
-
+To run a devleopment setup (backend and frontend):
 ```bash
-bun run index.ts
+bun run dev
 ```
 
-This project was created using `bun init` in bun v1.3.0. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+To run and build the client in production:
+```bash
+cd client && bun run build
+bun run start
+```
+
+To run the backend:
+```bash
+cd server && bun index.ts
+```
+
+## Credits
+
+This project uses express, socketIO, vite, react-color. AI usage is minimal (<5%).
