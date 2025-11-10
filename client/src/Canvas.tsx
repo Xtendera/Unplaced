@@ -3,20 +3,30 @@ import { useSocket } from './hooks/useSocket';
 
 interface CanvasProps {
   selectedColor?: string;
+  brushSize?: number;
 }
 
-function Canvas({ selectedColor = '#000000' }: CanvasProps) {
+interface UserCursor {
+  userId: string;
+  x: number;
+  y: number;
+  color: string;
+}
+
+function Canvas({ selectedColor = '#000000', brushSize = 1 }: CanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cursorLayerRef = useRef<HTMLCanvasElement | null>(null);
   const [hoveredPixel, setHoveredPixel] = useState<{ x: number; y: number } | null>(null);
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
   const [resetTimeRemaining, setResetTimeRemaining] = useState<number>(0);
+  const [otherCursors, setOtherCursors] = useState<Map<string, UserCursor>>(new Map());
   const GRID_SIZE = 32;
   const PIXEL_SIZE = 20;
   
   const [canvasState, setCanvasState] = useState<string[][]>(() => 
     Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill('#ffffff'))
   );
-  const { socket, setPixel } = useSocket();
+  const { socket } = useSocket();
 
   useEffect(() => {
     if (!socket) return;
@@ -53,12 +63,30 @@ function Canvas({ selectedColor = '#000000' }: CanvasProps) {
       setCooldownRemaining(0);
     };
 
+    const onUserCursor = (data: UserCursor) => {
+      setOtherCursors((prev) => {
+        const newCursors = new Map(prev);
+        newCursors.set(data.userId, data);
+        return newCursors;
+      });
+    };
+
+    const onUserLeft = (userId: string) => {
+      setOtherCursors((prev) => {
+        const newCursors = new Map(prev);
+        newCursors.delete(userId);
+        return newCursors;
+      });
+    };
+
     socket.on('canvasState', onCanvasState);
     socket.on('pixelUpdated', onPixelUpdated);
     socket.on('cooldownStart', onCooldownStart);
     socket.on('cooldownError', onCooldownError);
     socket.on('nextReset', onNextReset);
     socket.on('canvasReset', onCanvasReset);
+    socket.on('userCursor', onUserCursor);
+    socket.on('userLeft', onUserLeft);
 
     if (socket.connected) {
       socket.emit('requestCanvas');
@@ -71,6 +99,8 @@ function Canvas({ selectedColor = '#000000' }: CanvasProps) {
       socket.off('cooldownError', onCooldownError);
       socket.off('nextReset', onNextReset);
       socket.off('canvasReset', onCanvasReset);
+      socket.off('userCursor', onUserCursor);
+      socket.off('userLeft', onUserLeft);
     };
   }, [socket]);
 
@@ -103,7 +133,23 @@ function Canvas({ selectedColor = '#000000' }: CanvasProps) {
     const drawGrid = () => {
       for (let y = 0; y < GRID_SIZE; y++) {
         for (let x = 0; x < GRID_SIZE; x++) {
-          const isHovered = hoveredPixel && hoveredPixel.x === x && hoveredPixel.y === y;
+          let isHovered = false;
+          
+          if (hoveredPixel) {
+            const offset = Math.floor(brushSize / 2);
+            for (let dy = 0; dy < brushSize; dy++) {
+              for (let dx = 0; dx < brushSize; dx++) {
+                const hoverX = hoveredPixel.x - offset + dx;
+                const hoverY = hoveredPixel.y - offset + dy;
+                if (hoverX === x && hoverY === y) {
+                  isHovered = true;
+                  break;
+                }
+              }
+              if (isHovered) break;
+            }
+          }
+          
           const pixelColor = canvasState[y]?.[x] || '#ffffff';
           
           ctx.fillStyle = isHovered ? darkenColor(pixelColor, 0.3) : pixelColor;
@@ -116,7 +162,35 @@ function Canvas({ selectedColor = '#000000' }: CanvasProps) {
     };
 
     drawGrid();
-  }, [hoveredPixel, canvasState]);
+  }, [hoveredPixel, canvasState, brushSize]);
+
+  useEffect(() => {
+    const cursorCanvas = cursorLayerRef.current;
+    if (!cursorCanvas) return;
+    const ctx = cursorCanvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+
+    otherCursors.forEach((cursor) => {
+      const centerX = cursor.x * PIXEL_SIZE + PIXEL_SIZE / 2;
+      const centerY = cursor.y * PIXEL_SIZE + PIXEL_SIZE / 2;
+
+      ctx.strokeStyle = cursor.color;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(cursor.x * PIXEL_SIZE, cursor.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+
+      ctx.fillStyle = cursor.color;
+      ctx.globalAlpha = 0.3;
+      ctx.fillRect(cursor.x * PIXEL_SIZE, cursor.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = cursor.color;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }, [otherCursors, PIXEL_SIZE]);
 
   // Taken from online, I didn't write this function
   const darkenColor = (color: string, amount: number): string => {
@@ -141,6 +215,9 @@ function Canvas({ selectedColor = '#000000' }: CanvasProps) {
     
     if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
       setHoveredPixel({ x, y });
+      if (socket) {
+        socket.emit('cursorMove', { x, y });
+      }
     } else {
       setHoveredPixel(null);
     }
@@ -156,38 +233,69 @@ function Canvas({ selectedColor = '#000000' }: CanvasProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) / PIXEL_SIZE);
-    const y = Math.floor((e.clientY - rect.top) / PIXEL_SIZE);
+    const centerX = Math.floor((e.clientX - rect.left) / PIXEL_SIZE);
+    const centerY = Math.floor((e.clientY - rect.top) / PIXEL_SIZE);
     
-    if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
+    if (centerX >= 0 && centerX < GRID_SIZE && centerY >= 0 && centerY < GRID_SIZE) {
+      const pixels: Array<{ x: number; y: number }> = [];
+      const offset = Math.floor(brushSize / 2);
+      
+      for (let dy = 0; dy < brushSize; dy++) {
+        for (let dx = 0; dx < brushSize; dx++) {
+          const x = centerX - offset + dx;
+          const y = centerY - offset + dy;
+          
+          if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
+            pixels.push({ x, y });
+          }
+        }
+      }
+      
       setCanvasState((prev) => {
         if (prev.length === 0) return prev;
         const newState = prev.map(row => [...row]);
-        if (newState[y]) {
-          newState[y][x] = selectedColor;
-        }
+        pixels.forEach(({ x, y }) => {
+          if (newState[y]) {
+            newState[y][x] = selectedColor;
+          }
+        });
         return newState;
       });
       
-      setPixel(x, y, selectedColor);
+      if (socket) {
+        socket.emit('setPixels', { pixels, color: selectedColor });
+      }
     }
   };
 
   return (
     <div>
-      <canvas
-        ref={canvasRef}
-        width={GRID_SIZE * PIXEL_SIZE}
-        height={GRID_SIZE * PIXEL_SIZE}
-        onClick={handleCanvasClick}
-        onMouseMove={handleCanvasMouseMove}
-        onMouseLeave={handleCanvasMouseLeave}
-        style={{ 
-          cursor: cooldownRemaining > 0 ? 'not-allowed' : 'pointer', 
-          border: '1px solid #000',
-          opacity: cooldownRemaining > 0 ? 0.7 : 1
-        }}
-      />
+      <div style={{ position: 'relative', display: 'inline-block' }}>
+        <canvas
+          ref={canvasRef}
+          width={GRID_SIZE * PIXEL_SIZE}
+          height={GRID_SIZE * PIXEL_SIZE}
+          style={{ 
+            border: '1px solid #000',
+            opacity: cooldownRemaining > 0 ? 0.7 : 1,
+            position: 'absolute',
+            top: 0,
+            left: 0
+          }}
+        />
+        <canvas
+          ref={cursorLayerRef}
+          width={GRID_SIZE * PIXEL_SIZE}
+          height={GRID_SIZE * PIXEL_SIZE}
+          onClick={handleCanvasClick}
+          onMouseMove={handleCanvasMouseMove}
+          onMouseLeave={handleCanvasMouseLeave}
+          style={{ 
+            cursor: cooldownRemaining > 0 ? 'not-allowed' : 'pointer',
+            position: 'relative'
+          }}
+        />
+      </div>
       {cooldownRemaining > 0 && (
         <p style={{ marginTop: '10px', color: '#ff6b6b' }}>
           Next pixel place in: {Math.ceil(cooldownRemaining / 1000)}s

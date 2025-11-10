@@ -13,6 +13,16 @@ let globalCanvas: string[][] = Array(GRID_SIZE).fill(null).map(() =>
 );
 
 const userCooldowns = new Map<string, number>();
+const userColors = new Map<string, string>();
+const availableColors = ['#3b82f6', '#10b981', '#ef4444', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
+let colorIndex = 0;
+
+const assignUserColor = (socketId: string): string => {
+  const color = availableColors[colorIndex % availableColors.length] || '#3b82f6';
+  colorIndex++;
+  userColors.set(socketId, color);
+  return color;
+};
 
 const resetCanvas = () => {
   globalCanvas = Array(GRID_SIZE).fill(null).map(() => 
@@ -50,8 +60,13 @@ const io = new Server(httpServer, {
 });
 
 io.on('connection', (socket: Socket) => {
+  const userColor = assignUserColor(socket.id);
+  
   socket.emit('canvasState', globalCanvas);
   socket.emit('nextReset', getTimeUntilMidnight());
+  socket.emit('userColor', userColor);
+  
+  io.emit('userCount', io.engine.clientsCount);
 
   socket.on('ping', () => {
     socket.emit('pong', { timestamp: Date.now() });
@@ -60,6 +75,15 @@ io.on('connection', (socket: Socket) => {
   socket.on('requestCanvas', () => {
     socket.emit('canvasState', globalCanvas);
     socket.emit('nextReset', getTimeUntilMidnight());
+  });
+
+  socket.on('cursorMove', (data: { x: number; y: number }) => {
+    socket.broadcast.emit('userCursor', {
+      userId: socket.id,
+      x: data.x,
+      y: data.y,
+      color: userColor
+    });
   });
 
   socket.on('setPixel', (data: { x: number; y: number; color: string }) => {
@@ -80,9 +104,34 @@ io.on('connection', (socket: Socket) => {
       socket.emit('cooldownStart', { cooldownMs: COOLDOWN_MS });
     }
   });
+
+  socket.on('setPixels', (data: { pixels: Array<{ x: number; y: number }>; color: string }) => {
+    const { pixels, color } = data;
+    const now = Date.now();
+    const lastPlacement = userCooldowns.get(socket.id) || 0;
+    const timeRemaining = COOLDOWN_MS - (now - lastPlacement);
+    
+    if (timeRemaining > 0) {
+      socket.emit('cooldownError', { timeRemaining });
+      return;
+    }
+    
+    pixels.forEach(({ x, y }) => {
+      if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE && globalCanvas[y]) {
+        globalCanvas[y][x] = color;
+        io.emit('pixelUpdated', { x, y, color });
+      }
+    });
+    
+    userCooldowns.set(socket.id, now);
+    socket.emit('cooldownStart', { cooldownMs: COOLDOWN_MS });
+  });
   
   socket.on('disconnect', () => {
     userCooldowns.delete(socket.id);
+    userColors.delete(socket.id);
+    socket.broadcast.emit('userLeft', socket.id);
+    io.emit('userCount', io.engine.clientsCount);
   });
 });
 

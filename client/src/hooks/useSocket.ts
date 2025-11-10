@@ -8,6 +8,7 @@ let socket: Socket | null = null;
 export const useSocket = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [lastPong, setLastPong] = useState<number | null>(null);
+  const [userCount, setUserCount] = useState<number>(0);
 
   useEffect(() => {
     if (!socket) {
@@ -29,9 +30,14 @@ export const useSocket = () => {
       setLastPong(data.timestamp);
     };
 
+    const onUserCount = (count: number) => {
+      setUserCount(count);
+    };
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('pong', onPong);
+    socket.on('userCount', onUserCount);
 
     if (!socket.connected) {
       socket.connect();
@@ -41,6 +47,7 @@ export const useSocket = () => {
       socket?.off('connect', onConnect);
       socket?.off('disconnect', onDisconnect);
       socket?.off('pong', onPong);
+      socket?.off('userCount', onUserCount);
     };
   }, []);
 
@@ -62,5 +69,6 @@ export const useSocket = () => {
     lastPong,
     sendPing,
     setPixel,
+    userCount,
   };
 };
